@@ -1,0 +1,275 @@
+---
+title: "Analytical Hull-White Implementation Using R"
+author: "Mario Santoro"
+date: '2018-07-13'
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  word_document: default
+---
+
+
+#Introduction
+ATM's: Affine Term Structure Models
+
+# Hull-White Analytical Model
+The Hull–White (1990) general extensions of Vasicek  can be fitted to the initial yield and volatility curve. However, this flexibility has its price: the model cannot be handled analytically in general. We therefore restrict to the following extension of the Vasicek model that was analyzed by Hull and White  in 1994 (analytic HW model):
+
+$$dr(t) = (b(t)+ar(t))dt + \sigma dW(t)$$
+
+$a$ and $\sigma$ are chosen to fit volatility structure whereas $b(t)$ is chosen in order to match the initial yield curve.
+The model can be represented also as:
+$$ r(t)=x(t)+\alpha(t)$$
+where
+$$dx(t)=-ax(t)dt+\sigma dW(t)$$
+$$x(0)=0$$
+$$\alpha(t)=fwd(0,t)+\frac{\sigma^2}{2a^2}\left(1-e^{-at}\right)^2.$$
+$fwd(0,t)$ is the *market-implied istanteneous forward rate* at maturity $t>0$.
+
+
+Analytical HW provide an affine term structure because the bond prices are of the form
+
+$$ P(t,T) = A(t,T)\exp{(B(t,T)r(t))}$$
+
+with 
+$$B(t,T)=\frac{1}{a}(e^{-a(T-t)}-1)$$ 
+and 
+$$A(t,T)=\frac{P(0,T)}{P(0,t)}\exp{\left(-B(t,T)fwd(0,t)-\frac{1}{2}B^2(t,T)\phi(t)\right)}$$
+where
+$$
+\phi(t)=\frac{\sigma^2}{2a}\left(1-\exp(-2at)\right)
+$$
+We are interested in the *continuously compounded spot rate* $R(t,T)=\frac{-\log(P(t,T))}{T-t}$ and, in the case of analytic HW, we can obtain it explicitly:
+
+$$\begin{aligned}
+R(t,T) &= \\
+&=\frac{-\log(P(t,T))}{T-t}\\
+&= \frac{1}{T-t}\left(-\log(\frac{P(0,T)}{P(0,t)}) +\frac{B(t,T)^2}{2}\phi(t)+B(t,T)fwd(0,t)-B(t,T)r(t) \right)\\
+&= \frac{1}{T-t}\left(B(t,T)\left(-r(t)+fwd(0,t)+B(t,T)\frac{\phi(t)}{2}\right)+ 
+                  R(0,T)T - R(0,t)t \right)
+\end{aligned}
+$$
+For a more formal derivation you can see [Holmgaard](http://studenttheses.cbs.dk/bitstream/handle/10417/4138/anders_baek_holmgaard.pdf?sequence=1) and [Lund](http://www.jesperlund.com/lecturenotes/ctmod1_2.pdf)
+
+We want to simulate 10 scenarios of $R(t,T)$ every month, starting from next month to 1 years, with maturities every 1 month for 1 years from a specific yield curve.  
+
+```{r,eval=T}
+freq <- "monthly"
+delta_t <- 1/12
+horizon <- 1 # I take horizon = 1 years
+nb.sims <- 10 # Scenarios' Number 
+mat.max <- 1 #maturities max
+```
+
+
+##Spot Term Structure Estimation
+
+We estimate the spot term structure of interest rates using **termstrc** package.
+
+```{r,eval=TRUE}
+suppressPackageStartupMessages(library(termstrc))
+
+maturities0 <- c(3/12,6/12,1:3,
+                 seq(5,30, by = 5))
+yields <- t(as.matrix(c(-0.210376,-0.137938,-0.027532,              -0.204925,-0.173079,-0.014275,0.545688,
+                        0.905779,1.049415,1.087227,
+                        1.091134)/100))
+yield_curve <- data.frame("Maturities" = maturities0,
+                         "Yields" = as.vector(yields))
+library(ggplot2)
+library(dplyr)
+yield_curve %>% ggplot(aes(x = Maturities,
+                            y = Yields)) +
+  geom_line()
+dates0 <- c(as.Date(Sys.Date()) + 13)
+zydf <- zeroyields(maturities0,yields,dates0)
+zyest <- estim_nss(zydf, method = "asv",
+                   tauconstr =  c(0.2, 7, 0.1))
+times <- seq(from = 0, to = horizon, by = delta_t)
+beta <- zyest$optparam
+fwr <- fwr_asv(beta,times)
+```
+  
+## Dimensional Analysis  
+
+Before starting  the estimation and the simulation, we want to do some consideration on measure unities of parameters and functions, in particular regarding the time.  
+From $B(t,T)$ and $R(t,T)$ definition:  
+
+- $a$ is $[time]^{-1}$  
+
+- $B(t,T)$ is $[time]$    
+
+- $fwd(0,t)$ is $[time]^{-1}$  
+
+- $phi(t)$ is  $[time]^2$  
+
+- $\sigma^2$ is $[time]^-3$
+
+##Short-term rates simulation  
+Now  is time to set the parameters and simulate $r(t)$ using  package ESGtoolkit from [Moudiki](https://cran.r-project.org/web/packages/ESGtoolkit/)
+
+```{r,eval=TRUE}
+############# Hull-White short-rates simulaton ####
+# Simulation of gaussian shocks with ESGtoolkit
+
+set.seed(4)
+eps <- ESGtoolkit::simshocks(n = nb.sims, horizon = horizon, 
+                             frequency = "monthly")
+# Simulation of the factor x with ESGtoolkit
+ a <- .01
+ sigma <- a*.2
+x <- ESGtoolkit::simdiff(n = nb.sims, horizon = horizon, 
+                         frequency = "monthly",  
+                         model = "OU", 
+                         x0 = 0, theta1 = 0, 
+                         theta2 = a, 
+                         theta3 = sigma,
+                         eps = eps)
+# I use forward rates. With the low monthly frequency
+# I consider them as being instantaneous forward rates
+fwdrates <- ts(replicate(nb.sims, fwr), 
+               start = start(x), 
+               deltat = deltat(x))
+#curves$forwards instead of fwr if you use Rquantlib estimation
+# alpha
+t.out <- seq(from = 0, to = horizon, by = delta_t)
+param.alpha <- ts(replicate(nb.sims, 0.5*(sigma^2)*(1 - exp(-a*t.out))^2/(a^2)), 
+                  start = start(x), deltat = deltat(x))
+alpha <- fwdrates + param.alpha
+# The short-rate
+r <- x + alpha
+summary(as.vector(r))
+summary(as.vector(x))
+summary(as.vector(alpha))
+
+```
+
+```{r,eval=TRUE}
+#x
+ESGtoolkit::esgplotbands(x, xlab = "Times(years)", ylab = "x  quantiles", 
+                         main = "x quantiles")
+rg <- data.frame(x)
+rg <- data.frame("x" = c(rg[,1]),"Sim" = 1,"Times" = times)
+for (i in 2:nb.sims) {
+  rg <- rbind(rg,data.frame("x" = c(x[,i]),
+                            "Sim" = i,
+                            "Times" = times))
+}
+rg %>%
+  ggplot(aes(Times, x, group = factor(Sim))) +
+  geom_line(aes(colour = factor(Sim)))
+
+#alpha
+rg <- data.frame(alpha)
+rg <- data.frame("alpha" = c(rg[,1]),"Sim" = 1,"Times" = times)
+rg %>%
+  ggplot(aes(Times, alpha)) +
+  geom_line()
+
+ESGtoolkit::esgplotbands(r, xlab = "Times(years)", ylab = "short-rate quantiles", 
+                         main = "short-rate quantiles")
+# r
+rg <- data.frame(r)
+rg <- data.frame("r" = c(rg[,1]),"Sim" = 1,"Times" = times)
+for (i in 2:nb.sims) {
+  rg <- rbind(rg,data.frame("r" = c(r[,i]),
+                            "Sim" = i,
+                            "Times" = times))
+}
+rg %>%
+  ggplot(aes(Times, r, group = factor(Sim))) +
+  geom_line(aes(colour = factor(Sim)))
+```
+  
+    
+Now is time to compute the $R(t,T)$...
+  
+  
+```{r,eval=TRUE}
+B <- function(t,TT,a){
+  rt <- -(1.0 - exp(-a*(TT - t)))/a
+  return(rt)
+}
+
+phi <- function(t,a,sigma){
+  phit <- sigma*sigma/(2.*a)*(1.- exp(-2.*a*t))
+  return(phit)
+}
+
+system("rm HW.new.csv",ignore.stderr = T,wait = T)
+TT <- times
+Tmat <- seq(1/12,mat.max,1/12)
+for (iSim in 1:nb.sims) {
+  for (iT in 1:length(TT)) {
+    rnew <- r[iT,iSim]
+    #if(rnew<0) rnew=-rnew
+    pp0 <- data.frame("starting.t.from.today.Years"=1,"Sim"=200,"Maturity.Years"=2,"Rate"=.0099)
+    for (iT2 in 1:length(Tmat)){
+      rates <- 1./(Tmat[iT2])*
+        (
+          B(TT[iT],TT[iT]+Tmat[iT2],a)*
+            (-rnew+fwr[iT]+
+             B(TT[iT],TT[iT]+Tmat[iT2],a)*phi(TT[iT],a,sigma)/2)+
+          (TT[iT]+Tmat[iT2])*spr_asv(beta,(TT[iT]+Tmat[iT2]))-
+          TT[iT]*spr_asv(beta,(TT[iT]+1.e-10))
+      )
+      
+#Code if you are using Rquanlib estimation of forward rates      
+#       rates <- 1./(Tmat[iT2])*(
+#         B(TT[iT],TT[iT]+Tmat[iT2],a)*(rnew+curves$forwards[iT]+sigma^2/4*B(TT[iT],TT[iT]+Tmat[iT2],a)*B(0,(2*TT[iT]),a))-
+#         (TT[iT]+Tmat[iT2])*curves$zerorates[(6*iT2)]+
+#         TT[iT]*curves$zerorates[iT] 
+#       )
+      pp <- data.frame("starting.t.from.today.Years"=TT[iT],"Sim"=iSim,"Maturity.Years"=Tmat[iT2],"Rate"=rates)
+      pp0=rbind(pp0,pp)
+    }
+    write.table(pp0[-1,],"HW.new.csv",row.names =F,append = T,col.names = F,dec=".",sep=",")
+  }
+}
+```
+  
+Now we import saved simulations:
+
+```{r,eval=TRUE}
+library(dplyr)
+library(ggplot2)
+HW.new <- as.tbl(data.frame(read.table("HW.new.csv",sep=",",header = F,stringsAsFactors = F,dec = ".",colClasses = "numeric")))
+names(HW.new)<-c("Years.from.Today","Simulation","Maturities.Years","Rates")
+HW.new %>% head()
+```
+```{r,eval=FALSE,results=FALSE,echo=FALSE}
+library(tidyr)
+library(dplyr)
+system("rm sim_*",ignore.stderr = T,wait = T)
+HW.for.max <- HW.new%>%mutate(Rates.ok=Rates*100)%>%select(-Rates)%>%spread(Maturities.Years,Rates.ok)%>%arrange(Simulation)
+for (i in 1:nb.sims){
+ pp1<- HW.for.max %>%filter(Simulation==i)%>%filter(Years.from.Today>0)%>%select(-Simulation,-Years.from.Today)%>%write.table(paste("iswapall_",i-1,".dat",sep=""),sep=" ",row.names = F,col.names = F)
+}
+```
+
+Now we show the results with a particular graph:
+
+  - We do the mean of $R(t,T)$ over the `nb.sims`
+  - We graph $R(t,T)$ over $T$ using $t$ as a label for different curves
+  
+```{r} 
+HW.ok <- HW.new %>% 
+  group_by(Years.from.Today,Maturities.Years) %>%
+  summarise(Rate_mean = mean(Rates)) %>%
+  mutate(Month.from.Today = Years.from.Today*12)
+
+
+HW.ok %>%
+  ggplot(aes(x = Maturities.Years,
+             y = Rate_mean,
+             colour = factor(Month.from.Today))) +
+  geom_line()
+
+```
+
+  
+
