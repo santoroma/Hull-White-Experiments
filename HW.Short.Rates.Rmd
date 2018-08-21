@@ -66,32 +66,69 @@ mat.max <- 1 #maturities max
 ```
 
 
-##Spot Term Structure Estimation
+## Spot Term Structure Estimation
 
-We estimate the spot term structure of interest rates using **termstrc** package.
+We estimate the spot term structure of interest rates using **termstrc** package
+
+
+
+
 
 ```{r,eval=TRUE}
 suppressPackageStartupMessages(library(termstrc))
 
+
+#curva massimo
+#          
+
+#3_6_12_24_36_60_120_180_240_300_360_600
+
 maturities0 <- c(3/12,6/12,1:3,
-                 seq(5,30, by = 5))
-yields <- t(as.matrix(c(-0.210376,-0.137938,-0.027532,              -0.204925,-0.173079,-0.014275,0.545688,
-                        0.905779,1.049415,1.087227,
-                        1.091134)/100))
+                 seq(5,30, by = 5),50)
+yields <- t(as.matrix(c(-0.430871 ,-0.438842,-0.372662, -0.117284, 0.207947,
+                        0.939502, 1.590152, 2.261556, 2.765214, 3.062635, 3.325546, 3.513916)/100))
 yield_curve <- data.frame("Maturities" = maturities0,
                          "Yields" = as.vector(yields))
 library(ggplot2)
 library(dplyr)
-yield_curve %>% ggplot(aes(x = Maturities,
+yield_curve %>% ggplot(aes(x =Maturities,
                             y = Yields)) +
-  geom_line()
+  geom_line() + xlab("Maturities (years)") + ylab("Yields (%)")
+
+
 dates0 <- c(as.Date(Sys.Date()) + 13)
 zydf <- zeroyields(maturities0,yields,dates0)
-zyest <- estim_nss(zydf, method = "asv",
-                   tauconstr =  c(0.2, 7, 0.1))
+
+zero_coup <- data_frame(maturities =zydf$maturities,
+                        yields = yields %>% as.vector)
+
+zero_coup %>% ggplot(aes(x = maturities, y = yields)) + geom_line()
+
+zyest <- estim_nss(zydf, method = "ns",
+                   #tauconstr =  c(0.2, 7, 0.1),
+                   optimtype = "allglobal")
 times <- seq(from = 0, to = horizon, by = delta_t)
 beta <- zyest$optparam
-fwr <- fwr_asv(beta,times)
+fwr <- fwr_ns(beta,times)
+plot(fwr)
+
+# zyest2 <- estim_nss(zydf, method = "asv")#,
+#                    #tauconstr =  c(0.2, 7, 0.1),
+#                    #optimtype = "allglobal")
+# times <- seq(from = 0, to = horizon, by = delta_t)
+# beta <- zyest$optparam
+# fwr2 <- fwr_asv(beta,times)
+
+lambda <- 0.022 * 12
+zyest3 <- estim_nss(zydf, method = "dl",
+                   #tauconstr =  c(0.2, 7, 0.1),
+                   optimtype = "allglobal",
+                      lambda = lambda)
+times <- seq(from = 0, to = horizon, by = delta_t)
+beta3 <- zyest3$optparam
+fwr3 <- fwr_dl(beta3,times, lambda = lambda)
+#plot(zyest3)
+plot(fwr3)
 ```
   
 ## Dimensional Analysis  
@@ -131,7 +168,7 @@ x <- ESGtoolkit::simdiff(n = nb.sims, horizon = horizon,
                          eps = eps)
 # I use forward rates. With the low monthly frequency
 # I consider them as being instantaneous forward rates
-fwdrates <- ts(replicate(nb.sims, fwr), 
+fwdrates <- ts(replicate(nb.sims, fwr3), 
                start = start(x), 
                deltat = deltat(x))
 #curves$forwards instead of fwr if you use Rquantlib estimation
@@ -170,9 +207,18 @@ rg %>%
   ggplot(aes(Times, alpha)) +
   geom_line()
 
+#fwdrates
+rg <- data.frame(fwdrates)
+rg <- data.frame("fwdrates" = c(rg[,1]),"Sim" = 1,"Times" = times)
+rg %>%
+  ggplot(aes(Times, fwdrates)) +
+  geom_line()
+
+
+# r
 ESGtoolkit::esgplotbands(r, xlab = "Times(years)", ylab = "short-rate quantiles", 
                          main = "short-rate quantiles")
-# r
+
 rg <- data.frame(r)
 rg <- data.frame("r" = c(rg[,1]),"Sim" = 1,"Times" = times)
 for (i in 2:nb.sims) {
@@ -212,10 +258,10 @@ for (iSim in 1:nb.sims) {
       rates <- 1./(Tmat[iT2])*
         (
           B(TT[iT],TT[iT]+Tmat[iT2],a)*
-            (-rnew+fwr[iT]+
+            (-rnew+fwr3[iT]+
              B(TT[iT],TT[iT]+Tmat[iT2],a)*phi(TT[iT],a,sigma)/2)+
-          (TT[iT]+Tmat[iT2])*spr_asv(beta,(TT[iT]+Tmat[iT2]))-
-          TT[iT]*spr_asv(beta,(TT[iT]+1.e-10))
+          (TT[iT]+Tmat[iT2])*spr_dl(beta,(TT[iT]+Tmat[iT2]), lambda)-
+          TT[iT]*spr_dl(beta,(TT[iT]+1.e-10),lambda)
       )
       
 #Code if you are using Rquanlib estimation of forward rates      
