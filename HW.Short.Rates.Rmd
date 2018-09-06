@@ -60,9 +60,9 @@ We want to simulate 10 scenarios of $R(t,T)$ every month, starting from next mon
 ```{r,eval=T}
 freq <- "monthly"
 delta_t <- 1/12
-horizon <- 1 # I take horizon = 1 years
+horizon <- 20 # I take horizon = 1 years
 nb.sims <- 10 # Scenarios' Number 
-mat.max <- 1 #maturities max
+mat.max <- 50 #maturities max
 ```
 
 
@@ -92,7 +92,7 @@ yield_curve <- data.frame("Maturities" = maturities0,
 library(ggplot2)
 library(dplyr)
 yield_curve %>% ggplot(aes(x =Maturities,
-                            y = Yields)) +
+                            y = Yields*100)) +
   geom_line() + xlab("Maturities (years)") + ylab("Yields (%)")
 
 
@@ -102,11 +102,12 @@ zydf <- zeroyields(maturities0,yields,dates0)
 zero_coup <- data_frame(maturities =zydf$maturities,
                         yields = yields %>% as.vector)
 
-zero_coup %>% ggplot(aes(x = maturities, y = yields)) + geom_line()
+zero_coup %>% ggplot(aes(x = maturities, y = yields*100)) + geom_line()
 
 zyest <- estim_nss(zydf, method = "ns",
                    #tauconstr =  c(0.2, 7, 0.1),
                    optimtype = "allglobal")
+plot(zyest)
 times <- seq(from = 0, to = horizon, by = delta_t)
 beta <- zyest$optparam
 fwr <- fwr_ns(beta,times)
@@ -260,8 +261,8 @@ for (iSim in 1:nb.sims) {
           B(TT[iT],TT[iT]+Tmat[iT2],a)*
             (-rnew+fwr3[iT]+
              B(TT[iT],TT[iT]+Tmat[iT2],a)*phi(TT[iT],a,sigma)/2)+
-          (TT[iT]+Tmat[iT2])*spr_dl(beta,(TT[iT]+Tmat[iT2]), lambda)-
-          TT[iT]*spr_dl(beta,(TT[iT]+1.e-10),lambda)
+          (TT[iT]+Tmat[iT2])*spr_dl(beta3,(TT[iT]+Tmat[iT2]), lambda)-
+          TT[iT]*spr_dl(beta3,(TT[iT]+1.e-10),lambda)
       )
       
 #Code if you are using Rquanlib estimation of forward rates      
@@ -308,11 +309,33 @@ HW.ok <- HW.new %>%
   summarise(Rate_mean = mean(Rates)) %>%
   mutate(Month.from.Today = Years.from.Today*12)
 
+pp <- HW.new %>% 
+  mutate(Month.from.Today = Years.from.Today*12) %>%
+  filter(Month.from.Today == 12) %>%
+  ggplot(aes(x = Maturities.Years,
+             y = Rates,
+             colour = factor(Simulation))) +
+  geom_line()
+
+
+pp2 <- HW.new %>% 
+  mutate(Month.from.Today = Years.from.Today*12) %>%
+  filter(Month.from.Today == 120) %>%
+  ggplot(aes(x = Maturities.Years,
+             y = Rates,
+             colour = factor(Simulation))) +
+  geom_line()
+
+
+gridExtra::grid.arrange(pp,pp2)
+
 
 HW.ok %>%
+  mutate(Month.from.Today = factor(Month.from.Today)) %>%
+  filter(Month.from.Today %in% c(12,60,120,240)) %>%
   ggplot(aes(x = Maturities.Years,
              y = Rate_mean,
-             colour = factor(Month.from.Today))) +
+             colour = Month.from.Today)) +
   geom_line()
 
 ```
